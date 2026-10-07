@@ -790,17 +790,24 @@ async function enableNotifications(showMessage = true) {
     console.log("FCM Token:", token);
 
     if (currentUser?.uid) {
-      await setDoc(
-        doc(db, "users", currentUser.uid, "fcmTokens", token),
+    await setDoc(
+        doc(
+            db,
+            "users",
+            currentUser.uid,
+            "fcmTokens",
+            encodeURIComponent(token)
+        ),
         {
-          token,
-          uid: currentUser.uid,
-          email: currentUser.email || "",
-          platform: "web",
-          updatedAt: new Date()
+            token,
+            uid: currentUser.uid,
+            email: currentUser.email || "",
+            platform: "web",
+            updatedAt: new Date()
         },
         { merge: true }
-      );
+    );
+}
       console.log("FCM Token saved to Firestore.");
     }
 
