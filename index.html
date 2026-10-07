@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Library Seat Reservation</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#f4f6f8;color:#18212b}
+header{background:#17324d;color:white;padding:18px 20px;display:flex;justify-content:space-between;align-items:center}
+.logo{font-size:20px;font-weight:700}
+.container{max-width:850px;margin:24px auto;padding:0 16px}
+.card{background:white;border-radius:16px;padding:22px;box-shadow:0 4px 18px rgba(0,0,0,.08);margin-bottom:18px}
+h1,h2,h3{margin-top:0}
+.subtitle{color:#697586}
+input,select,button{width:100%;padding:13px;border-radius:10px;border:1px solid #ccd3da;font-size:15px}
+button{background:#17324d;color:white;border:0;cursor:pointer;font-weight:700}
+button.secondary{background:#e9eef3;color:#17324d}
+button.danger{background:#b42318}
+button:disabled{background:#c8cdd2;cursor:not-allowed}
+.form-group{margin:14px 0}
+.hidden{display:none}
+.top-actions{display:flex;gap:8px}
+.top-actions button{width:auto;padding:8px 12px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:16px 0}
+.stat{background:#f7f9fb;padding:14px;border-radius:12px;text-align:center}
+.stat b{display:block;font-size:22px}
+.legend{display:flex;gap:18px;flex-wrap:wrap;margin:15px 0;color:#59636e;font-size:14px}
+.dot{display:inline-block;width:12px;height:12px;border-radius:50%;margin-right:5px}
+.available{background:#28a745}.reserved{background:#f0ad00}.occupied{background:#dc3545}
+.seat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.seat{min-height:80px;border:0;border-radius:12px;color:white;font-weight:bold;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.seat small{font-weight:normal;margin-top:5px}
+.seat.available{background:#28a745}
+.seat.reserved{background:#f0ad00}
+.seat.occupied{background:#dc3545}
+.seat.selected{outline:4px solid #17324d;outline-offset:2px}
+.reservation{border:2px solid #dbe4ec;border-radius:14px;padding:18px}
+.row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #edf0f2}
+.row:last-child{border-bottom:0}
+.success{background:#eaf8ef;color:#16733b;padding:14px;border-radius:10px;margin-bottom:15px}
+.notice{background:#fff7df;color:#765900;padding:13px;border-radius:10px;margin:12px 0}
+.footer{text-align:center;color:#8a94a0;font-size:13px;padding:20px}
+@media(max-width:600px){.seat-grid{grid-template-columns:repeat(2,1fr)}.stats{grid-template-columns:1fr 1fr}.container{margin-top:15px}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">📚 Library Seat</div>
+  <div class="top-actions">
+    <button class="secondary" onclick="showPage('home')">Seats</button>
+    <button class="secondary" onclick="showPage('reservation')">My Reservation</button>
+  </div>
+</header>
+
+<div class="container">
+
+<section id="loginPage" class="card">
+  <h1>Library Seat Reservation</h1>
+  <p class="subtitle">Reserve your study seat quickly and easily.</p>
+  <div class="form-group">
+    <label>Student ID</label>
+    <input id="studentId" placeholder="Enter your student ID">
+  </div>
+  <button type="button" onclick="login()">Login</button>
+  <p class="footer">Scan the library QR code to access this system.</p>
+</section>
+
+<section id="home" class="hidden">
+  <div class="card">
+    <h2>Choose Your Seat</h2>
+    <p class="subtitle">2nd Floor • Study Area</p>
+
+    <div class="stats">
+      <div class="stat"><b id="availableCount">0</b>Available</div>
+      <div class="stat"><b id="reservedCount">0</b>Reserved</div>
+      <div class="stat"><b id="occupiedCount">0</b>Occupied</div>
+    </div>
+
+    <div class="legend">
+      <span><i class="dot available"></i>Available</span>
+      <span><i class="dot reserved"></i>Reserved</span>
+      <span><i class="dot occupied"></i>Occupied</span>
+    </div>
+
+    <div class="seat-grid" id="seatGrid"></div>
+  </div>
+
+  <div id="selectedCard" class="card hidden">
+    <h3>Selected Seat</h3>
+    <div class="reservation">
+      <div class="row"><span>Student ID</span><b id="selectedStudent"></b></div>
+      <div class="row"><span>Seat</span><b id="selectedSeat"></b></div>
+      <div class="row"><span>Date</span><b id="selectedDate"></b></div>
+      <div class="row"><span>Time</span><b>13:00 – 16:00</b></div>
+    </div>
+    <br>
+    <button onclick="reserveSeat()">Confirm Reservation</button>
+  </div>
+</section>
+
+<section id="reservation" class="hidden">
+  <div class="card">
+    <h2>My Reservation</h2>
+    <div id="reservationContent"></div>
+  </div>
+</section>
+
+<section id="checkin" class="hidden">
+  <div class="card">
+    <h2>Check-in</h2>
+    <div class="success">✓ Your reservation has been confirmed.</div>
+    <div class="reservation">
+      <div class="row"><span>Seat</span><b id="checkinSeat"></b></div>
+      <div class="row"><span>Student ID</span><b id="checkinStudent"></b></div>
+      <div class="row"><span>Reservation</span><b>13:00 – 16:00</b></div>
+    </div>
+    <div class="notice">Please check in within 15 minutes of your reservation time. Otherwise, the seat will be released automatically.</div>
+    <button onclick="checkIn()">Check-in Now</button>
+  </div>
+</section>
+
+<div class="footer">Library Seat Reservation System • Prototype</div>
+</div>
+
+<script>
+let student = "";
+let selectedSeat = null;
+let reservation = null;
+
+const seats = [
+  {id:"A01",status:"available"},{id:"A02",status:"occupied"},
+  {id:"A03",status:"available"},{id:"A04",status:"available"},
+  {id:"B01",status:"available"},{id:"B02",status:"reserved"},
+  {id:"B03",status:"occupied"},{id:"B04",status:"available"},
+  {id:"C01",status:"available"},{id:"C02",status:"available"},
+  {id:"C03",status:"occupied"},{id:"C04",status:"available"}
+];
+
+function login(){
+  const input = document.getElementById("studentId");
+  const value = input.value.trim();
+
+  if (value === "") {
+    alert("Please enter your Student ID.");
+    input.focus();
+    return;
+  }
+
+  student = value;
+
+  // Hide the login page and show the seat selection page
+  document.getElementById("loginPage").classList.add("hidden");
+  document.getElementById("home").classList.remove("hidden");
+
+  renderSeats();
+}
+
+function showPage(page){
+  ["loginPage","home","reservation","checkin"].forEach(id=>{
+    document.getElementById(id).classList.add("hidden");
+  });
+  if(page==="home"){
+    document.getElementById("home").classList.remove("hidden");
+    renderSeats();
+  }else if(page==="reservation"){
+    document.getElementById("reservation").classList.remove("hidden");
+    renderReservation();
+  }else if(page==="checkin"){
+    document.getElementById("checkin").classList.remove("hidden");
+  }else{
+    document.getElementById("loginPage").classList.remove("hidden");
+  }
+}
+
+function renderSeats(){
+  const grid=document.getElementById("seatGrid");
+  grid.innerHTML="";
+  let a=0,r=0,o=0;
+  seats.forEach(seat=>{
+    if(seat.status==="available")a++;
+    if(seat.status==="reserved")r++;
+    if(seat.status==="occupied")o++;
+    const btn=document.createElement("button");
+    btn.className="seat "+seat.status+(selectedSeat===seat.id?" selected":"");
+    btn.innerHTML=seat.id+"<small>"+seat.status+"</small>";
+    btn.disabled=seat.status!=="available";
+    if(seat.status==="available")btn.onclick=()=>selectSeat(seat.id);
+    grid.appendChild(btn);
+  });
+  document.getElementById("availableCount").textContent=a;
+  document.getElementById("reservedCount").textContent=r;
+  document.getElementById("occupiedCount").textContent=o;
+}
+
+function selectSeat(id){
+  selectedSeat=id;
+  document.getElementById("selectedStudent").textContent=student;
+  document.getElementById("selectedSeat").textContent=id;
+  document.getElementById("selectedDate").textContent=new Date().toLocaleDateString();
+  document.getElementById("selectedCard").classList.remove("hidden");
+  renderSeats();
+}
+
+function reserveSeat(){
+  if(!selectedSeat)return;
+  const seat=seats.find(s=>s.id===selectedSeat);
+  seat.status="reserved";
+  reservation={
+    student:student,
+    seat:selectedSeat,
+    date:new Date().toLocaleDateString(),
+    status:"Reserved",
+    checkedIn:false
+  };
+  selectedSeat=null;
+  document.getElementById("selectedCard").classList.add("hidden");
+  showPage("reservation");
+}
+
+function renderReservation(){
+  const box=document.getElementById("reservationContent");
+  if(!reservation){
+    box.innerHTML="<p class='subtitle'>You do not have an active reservation.</p>";
+    return;
+  }
+  box.innerHTML=`
+    <div class="success">✓ Reservation confirmed</div>
+    <div class="reservation">
+      <div class="row"><span>Student ID</span><b>${reservation.student}</b></div>
+      <div class="row"><span>Seat</span><b>${reservation.seat}</b></div>
+      <div class="row"><span>Date</span><b>${reservation.date}</b></div>
+      <div class="row"><span>Time</span><b>13:00 – 16:00</b></div>
+      <div class="row"><span>Status</span><b>${reservation.status}</b></div>
+    </div>
+    <br>
+    ${reservation.checkedIn
+      ? `<button class="danger" onclick="checkOut()">Check-out</button>`
+      : `<button onclick="openCheckin()">Check-in</button><br><br>
+         <button class="danger" onclick="cancelReservation()">Cancel Reservation</button>`}
+  `;
+}
+
+function openCheckin(){
+  document.getElementById("checkinSeat").textContent=reservation.seat;
+  document.getElementById("checkinStudent").textContent=reservation.student;
+  showPage("checkin");
+}
+
+function checkIn(){
+  reservation.checkedIn=true;
+  reservation.status="Checked-in";
+  const seat=seats.find(s=>s.id===reservation.seat);
+  seat.status="occupied";
+  showPage("reservation");
+}
+
+function checkOut(){
+  const seat=seats.find(s=>s.id===reservation.seat);
+  seat.status="available";
+  reservation=null;
+  showPage("reservation");
+}
+
+function cancelReservation(){
+  const seat=seats.find(s=>s.id===reservation.seat);
+  seat.status="available";
+  reservation=null;
+  showPage("reservation");
+}
+
+showPage("loginPage");
+</script>
+</body>
+</html>
