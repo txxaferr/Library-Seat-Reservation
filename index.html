@@ -460,7 +460,7 @@ async function loginWithGoogle() {
     setupTimeSelectors();
     listenToReservations();
     listenToMyReservation();
-    //enableNotifications(false);
+    enableNotifications(false);
   } catch (error) {
     console.error("Google sign-in error:", error);
     errorBox.textContent = error.code === "auth/popup-closed-by-user"
@@ -790,18 +790,17 @@ async function enableNotifications(showMessage = true) {
     console.log("FCM Token:", token);
 
     if (currentUser?.uid) {
-    await setDoc(
-        doc(db, "users", currentUser.uid, "fcmTokens", token)
+      await setDoc(
+        doc(db, "users", currentUser.uid, "fcmTokens", encodeURIComponent(token)),
         {
-            token,
-            uid: currentUser.uid,
-            email: currentUser.email || "",
-            platform: "web",
-            updatedAt: new Date()
+          token,
+          uid: currentUser.uid,
+          email: currentUser.email || "",
+          platform: "web",
+          updatedAt: new Date()
         },
         { merge: true }
-    );
-}
+      );
       console.log("FCM Token saved to Firestore.");
     }
 
@@ -843,11 +842,6 @@ window.cancelReservation = cancelReservation;
 window.enableNotifications = enableNotifications;
 
 setInterval(checkExpiredReservations, 30000);
-
-showPage("loginPage");
-</script>
-</body>
-</html>
 
 showPage("loginPage");
 </script>
