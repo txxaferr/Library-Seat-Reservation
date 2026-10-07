@@ -590,7 +590,9 @@ async function reserveSeat() {
     }
 
     await addDoc(collection(db, "reservations"), {
-      student,
+      uid: currentUser.uid,
+      email: currentUser.email,
+      student: currentUser.email,
       seat: selectedSeat,
       date: window.date,
       startAt: window.start,
