@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Library Seat">
 <title>Library Seat Reservation</title>
 <style>
 *{box-sizing:border-box}
@@ -460,7 +463,6 @@ async function loginWithGoogle() {
     setupTimeSelectors();
     listenToReservations();
     listenToMyReservation();
-    enableNotifications(false);
   } catch (error) {
     console.error("Google sign-in error:", error);
     errorBox.textContent = error.code === "auth/popup-closed-by-user"
@@ -632,10 +634,11 @@ async function checkExpiredReservations() {
         checkedIn: false
       });
 
-      if (r.uid === currentUser?.uid && "Notification" in window && Notification.permission === "granted") {
-        new Notification("Library Seat Reservation", {
-          body: `Your reservation for seat ${r.seat} has expired.`
-        });
+      if (r.uid === currentUser?.uid) {
+        await showLocalNotification(
+          "Library Seat Reservation",
+          `Your reservation for seat ${r.seat} has expired.`
+        );
       }
     } catch (error) {
       console.error("Expiration update failed:", error);
@@ -756,26 +759,97 @@ async function cancelReservation() {
   }
 }
 
+function isIOSDevice() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
+function isStandaloneWebApp() {
+  return window.matchMedia("(display-mode: standalone)").matches ||
+    window.navigator.standalone === true;
+}
+
+function notificationSupportMessage() {
+  if (isIOSDevice() && !isStandaloneWebApp()) {
+    return "On iPhone/iPad, first use Safari → Share → Add to Home Screen, then open Library Seat from the Home Screen and enable Notifications there.";
+  }
+  return "This browser or app does not support web notifications. Please use a recent Safari, Chrome, or Edge over HTTPS.";
+}
+
+async function getMessagingServiceWorker() {
+  if (!("serviceWorker" in navigator)) return null;
+
+  const registration = await navigator.serviceWorker.register(
+    "/Library-Seat-Reservation/firebase-messaging-sw.js",
+    { scope: "/Library-Seat-Reservation/" }
+  );
+
+  await navigator.serviceWorker.ready;
+  return registration;
+}
+
+async function showLocalNotification(title, body) {
+  try {
+    if (!("serviceWorker" in navigator)) return false;
+
+    const registration = await navigator.serviceWorker.ready;
+
+    if ("Notification" in window && Notification.permission === "granted") {
+      await registration.showNotification(title, {
+        body,
+        icon: "/Library-Seat-Reservation/icon-192.png",
+        tag: "library-seat-reservation"
+      });
+      return true;
+    }
+  } catch (error) {
+    console.error("Local notification error:", error);
+  }
+  return false;
+}
+
 async function enableNotifications(showMessage = true) {
   try {
-    if (!("Notification" in window)) {
-      if (showMessage) alert("This browser does not support notifications.");
-      return null;
-    }
-
-    const permission = await Notification.requestPermission();
-
-    if (permission !== "granted") {
-      if (showMessage) alert("Notification permission was not granted.");
+    // iPhone/iPad Web Push is available for Home Screen web apps.
+    if (isIOSDevice() && !isStandaloneWebApp()) {
+      if (showMessage) alert(notificationSupportMessage());
       return null;
     }
 
     if (!("serviceWorker" in navigator)) {
-      if (showMessage) alert("Service Worker is not supported by this browser.");
+      if (showMessage) alert(notificationSupportMessage());
       return null;
     }
 
-    const registration = await navigator.serviceWorker.ready;
+    if (!("Notification" in window)) {
+      if (showMessage) alert(notificationSupportMessage());
+      return null;
+    }
+
+    // Permission must be requested from a direct user interaction,
+    // so this function is intentionally called by the Notifications button.
+    let permission = Notification.permission;
+
+    if (permission !== "granted") {
+      permission = await Notification.requestPermission();
+    }
+
+    if (permission !== "granted") {
+      if (showMessage) {
+        alert(
+          permission === "denied"
+            ? "Notifications are blocked. Please allow notifications for Library Seat in your browser/device settings."
+            : "Notification permission was not granted."
+        );
+      }
+      return null;
+    }
+
+    const registration = await getMessagingServiceWorker();
+    if (!registration) {
+      if (showMessage) alert("Service Worker is not supported by this browser.");
+      return null;
+    }
 
     const token = await getToken(messaging, {
       vapidKey: "BNuecVNHDIdHEgtA1ZCs3pGRiWZObpuBKI2lMX5DER45Z-tJxe6YZppT5hRB51qCBNB6EGt3QGD9WZVpF24qjAc",
@@ -812,20 +886,21 @@ async function enableNotifications(showMessage = true) {
   } catch (error) {
     console.error("Notification setup error:", error);
     if (showMessage) {
-      alert("Unable to enable notifications. Please check the Firebase Messaging setup.");
+      alert(`Unable to enable notifications: ${error.message || error}`);
     }
     return null;
   }
 }
 
-onMessage(messaging, payload => {
+onMessage(messaging, async payload => {
   console.log("Foreground notification:", payload);
+
   const title = payload.notification?.title || "Library Seat Reservation";
   const body = payload.notification?.body || "You have a library reservation notification.";
 
-  if (Notification.permission === "granted") {
-    new Notification(title, { body });
-  }
+  // Use the service worker on all supported platforms instead of
+  // `new Notification()`, which is unreliable/not supported in iPhone web apps.
+  await showLocalNotification(title, body);
 });
 
 window.loginWithGoogle = loginWithGoogle;
