@@ -19,6 +19,8 @@ button.secondary{background:#e9eef3;color:#17324d}
 button.danger{background:#b42318}
 button:disabled{background:#c8cdd2;cursor:not-allowed}
 .form-group{margin:14px 0}
+.time-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+@media(max-width:600px){.time-grid{grid-template-columns:1fr}}
 .hidden{display:none}
 .top-actions{display:flex;gap:8px}
 .top-actions button{width:auto;padding:8px 12px}
@@ -93,8 +95,27 @@ button:disabled{background:#c8cdd2;cursor:not-allowed}
     <div class="reservation">
       <div class="row"><span>Student ID</span><b id="selectedStudent"></b></div>
       <div class="row"><span>Seat</span><b id="selectedSeat"></b></div>
-      <div class="row"><span>Date</span><b id="selectedDate"></b></div>
-      <div class="row"><span>Time</span><b>13:00 – 16:00</b></div>
+    </div>
+
+    <div class="time-grid">
+      <div class="form-group">
+        <label for="reservationDate">Date</label>
+        <input id="reservationDate" type="date" onchange="updateSelectedSummary()">
+      </div>
+      <div class="form-group">
+        <label for="startTime">Start time</label>
+        <select id="startTime" onchange="updateEndTimes(); updateSelectedSummary();"></select>
+      </div>
+      <div class="form-group">
+        <label for="endTime">End time</label>
+        <select id="endTime" onchange="updateSelectedSummary();"></select>
+      </div>
+    </div>
+
+    <div class="notice">Choose a future time. Each reservation can be up to 3 hours.</div>
+
+    <div class="reservation">
+      <div class="row"><span>Reservation</span><b id="selectedDateTime"></b></div>
     </div>
     <br>
     <button onclick="reserveSeat()">Confirm Reservation</button>
@@ -115,7 +136,7 @@ button:disabled{background:#c8cdd2;cursor:not-allowed}
     <div class="reservation">
       <div class="row"><span>Seat</span><b id="checkinSeat"></b></div>
       <div class="row"><span>Student ID</span><b id="checkinStudent"></b></div>
-      <div class="row"><span>Reservation</span><b>13:00 – 16:00</b></div>
+      <div class="row"><span>Reservation</span><b id="checkinTime"></b></div>
     </div>
     <div class="notice">Please check in within 15 minutes of your reservation time. Otherwise, the seat will be released automatically.</div>
     <button onclick="checkIn()">Check-in Now</button>
@@ -174,6 +195,14 @@ const defaultSeats = [
 ];
 
 let seats = [...defaultSeats];
+let selectedDate = "";
+let selectedStartTime = "";
+let selectedEndTime = "";
+
+const LIBRARY_OPEN = "08:00";
+const LIBRARY_CLOSE = "20:00";
+const SLOT_MINUTES = 30;
+const MAX_RESERVATION_MINUTES = 180;
 
 async function initializeSeats(){
   const snapshot = await getDocs(collection(db, "seats"));
@@ -264,62 +293,193 @@ function selectSeat(id){
   selectedSeat=id;
   document.getElementById("selectedStudent").textContent=student;
   document.getElementById("selectedSeat").textContent=id;
-  document.getElementById("selectedDate").textContent=new Date().toLocaleDateString();
+
+  setupReservationInputs();
   document.getElementById("selectedCard").classList.remove("hidden");
   renderSeats();
+  updateSelectedSummary();
 }
 
-function getTodayAt(hour, minute){
-  const d=new Date();
-  d.setHours(hour, minute, 0, 0);
-  return d;
+function localDateString(date=new Date()){
+  const y=date.getFullYear();
+  const m=String(date.getMonth()+1).padStart(2,"0");
+  const d=String(date.getDate()).padStart(2,"0");
+  return `${y}-${m}-${d}`;
 }
 
+function timeToMinutes(time){
+  const [h,m]=time.split(":").map(Number);
+  return h*60+m;
+}
+
+function minutesToTime(minutes){
+  const h=Math.floor(minutes/60);
+  const m=minutes%60;
+  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+}
+
+function getTimeOptions(){
+  const options=[];
+  for(let m=timeToMinutes(LIBRARY_OPEN); m<=timeToMinutes(LIBRARY_CLOSE); m+=SLOT_MINUTES){
+    options.push(minutesToTime(m));
+  }
+  return options;
+}
+
+function setupReservationInputs(){
+  const dateInput=document.getElementById("reservationDate");
+  const startSelect=document.getElementById("startTime");
+  if(!dateInput) return;
+
+  const today=localDateString();
+  dateInput.min=today;
+  dateInput.value=selectedDate && selectedDate>=today ? selectedDate : today;
+
+  const options=getTimeOptions();
+  startSelect.innerHTML=options.slice(0,-1)
+    .map(t=>`<option value="${t}">${t}</option>`).join("");
+
+  const now=new Date();
+  let defaultStart=timeToMinutes(LIBRARY_OPEN);
+  if(dateInput.value===today){
+    const rounded=Math.ceil((now.getHours()*60+now.getMinutes())/SLOT_MINUTES)*SLOT_MINUTES;
+    defaultStart=Math.max(defaultStart, rounded);
+    defaultStart=Math.min(defaultStart, timeToMinutes(LIBRARY_CLOSE)-SLOT_MINUTES);
+  }
+
+  selectedStartTime=selectedStartTime || minutesToTime(defaultStart);
+  if(!options.slice(0,-1).includes(selectedStartTime)){
+    selectedStartTime=minutesToTime(defaultStart);
+  }
+  startSelect.value=selectedStartTime;
+  updateEndTimes();
+}
+
+function updateEndTimes(){
+  const startSelect=document.getElementById("startTime");
+  const endSelect=document.getElementById("endTime");
+  if(!startSelect || !endSelect) return;
+
+  const start=timeToMinutes(startSelect.value);
+  const close=timeToMinutes(LIBRARY_CLOSE);
+  const maxEnd=Math.min(start+MAX_RESERVATION_MINUTES,close);
+
+  const options=[];
+  for(let m=start+SLOT_MINUTES;m<=maxEnd;m+=SLOT_MINUTES){
+    options.push(minutesToTime(m));
+  }
+
+  endSelect.innerHTML=options.map(t=>`<option value="${t}">${t}</option>`).join("");
+  if(selectedEndTime && options.includes(selectedEndTime)){
+    endSelect.value=selectedEndTime;
+  }else{
+    endSelect.value=options[options.length-1];
+  }
+  selectedEndTime=endSelect.value;
+}
+
+function updateSelectedSummary(){
+  const date=document.getElementById("reservationDate");
+  const start=document.getElementById("startTime");
+  const end=document.getElementById("endTime");
+  if(!date || !start || !end) return;
+
+  selectedDate=date.value;
+  selectedStartTime=start.value;
+  selectedEndTime=end.value;
+
+  document.getElementById("selectedDateTime").textContent=
+    `${selectedDate} • ${selectedStartTime} – ${selectedEndTime}`;
+}
 async function reserveSeat(){
   if(!selectedSeat || !student) return;
 
-  const seatId=selectedSeat;
-  const seatRef=doc(db,"seats",seatId);
-  const startAt=getTodayAt(13,0);
-  const endAt=getTodayAt(16,0);
+  const date=document.getElementById("reservationDate")?.value;
+  const startTime=document.getElementById("startTime")?.value;
+  const endTime=document.getElementById("endTime")?.value;
 
-  if(endAt <= new Date()){
-    alert("Today's reservation time (13:00–16:00) has already ended.");
+  if(!date || !startTime || !endTime){
+    alert("Please select a date and time.");
+    return;
+  }
+
+  const startMinutes=timeToMinutes(startTime);
+  const endMinutes=timeToMinutes(endTime);
+  const now=new Date();
+  const startDateTime=new Date(`${date}T${startTime}:00`);
+  const endDateTime=new Date(`${date}T${endTime}:00`);
+
+  if(startDateTime <= now){
+    alert("Please choose a future start time.");
+    return;
+  }
+  if(endMinutes <= startMinutes){
+    alert("End time must be after start time.");
+    return;
+  }
+  if(endMinutes-startMinutes > MAX_RESERVATION_MINUTES){
+    alert("A reservation can be up to 3 hours.");
+    return;
+  }
+  if(startMinutes < timeToMinutes(LIBRARY_OPEN) || endMinutes > timeToMinutes(LIBRARY_CLOSE)){
+    alert(`Reservations are available from ${LIBRARY_OPEN} to ${LIBRARY_CLOSE}.`);
     return;
   }
 
   try {
-    const reservationId = await runTransaction(db, async transaction => {
-      const seatSnap = await transaction.get(seatRef);
-      if(!seatSnap.exists()) throw new Error("Seat does not exist.");
-      const seatData=seatSnap.data();
-      if(seatData.status !== "available") throw new Error("This seat is no longer available.");
+    const snapshot=await getDocs(collection(db,"reservations"));
 
-      const reservationRef=doc(collection(db,"reservations"));
-      transaction.update(seatRef,{status:"reserved", reservedBy:student});
-      transaction.set(reservationRef,{
-        student,
-        seat:seatId,
-        date:new Date().toLocaleDateString(),
-        startAt,
-        endAt,
-        status:"Reserved",
-        checkedIn:false,
-        createdAt:new Date()
-      });
-      return reservationRef.id;
+    const overlapping=snapshot.docs.some(d=>{
+      const r=d.data();
+      if(r.seat!==selectedSeat || r.date!==date) return false;
+      if(!["Reserved","Checked-in"].includes(r.status)) return false;
+
+      const existingStart=r.startAt?.toDate ? r.startAt.toDate() : new Date(r.startAt);
+      const existingEnd=r.endAt?.toDate ? r.endAt.toDate() : new Date(r.endAt);
+      return startDateTime < existingEnd && endDateTime > existingStart;
+    });
+
+    if(overlapping){
+      alert("This seat is already reserved during the selected time.");
+      return;
+    }
+
+    const studentOverlap=snapshot.docs.some(d=>{
+      const r=d.data();
+      if(r.student!==student || r.date!==date) return false;
+      if(!["Reserved","Checked-in"].includes(r.status)) return false;
+
+      const existingStart=r.startAt?.toDate ? r.startAt.toDate() : new Date(r.startAt);
+      const existingEnd=r.endAt?.toDate ? r.endAt.toDate() : new Date(r.endAt);
+      return startDateTime < existingEnd && endDateTime > existingStart;
+    });
+
+    if(studentOverlap){
+      alert("You already have a reservation during this time.");
+      return;
+    }
+
+    const reservationRef=doc(collection(db,"reservations"));
+    await setDoc(reservationRef,{
+      student,
+      seat:selectedSeat,
+      date,
+      startAt:startDateTime,
+      endAt:endDateTime,
+      status:"Reserved",
+      checkedIn:false,
+      createdAt:new Date()
     });
 
     selectedSeat=null;
     document.getElementById("selectedCard").classList.add("hidden");
     showPage("reservation");
-    console.log("Reservation created:", reservationId);
+    console.log("Reservation created:", reservationRef.id);
   } catch(error) {
     console.error(error);
     alert(error.message || "Unable to reserve this seat.");
   }
 }
-
 function listenToMyReservation(){
   if(unsubscribeReservation) unsubscribeReservation();
   const q=query(
@@ -403,6 +563,10 @@ function openCheckin(){
   if(!reservation)return;
   document.getElementById("checkinSeat").textContent=reservation.seat;
   document.getElementById("checkinStudent").textContent=reservation.student;
+  const start=reservation.startAt?.toDate ? reservation.startAt.toDate() : new Date(reservation.startAt);
+  const end=reservation.endAt?.toDate ? reservation.endAt.toDate() : new Date(reservation.endAt);
+  document.getElementById("checkinTime").textContent=
+    `${start.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})} – ${end.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}`;
   showPage("checkin");
 }
 
@@ -463,6 +627,8 @@ async function enableNotifications(){
 window.login=login;
 window.showPage=showPage;
 window.selectSeat=selectSeat;
+window.updateEndTimes=updateEndTimes;
+window.updateSelectedSummary=updateSelectedSummary;
 window.reserveSeat=reserveSeat;
 window.openCheckin=openCheckin;
 window.checkIn=checkIn;
