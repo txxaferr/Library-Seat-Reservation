@@ -460,7 +460,7 @@ async function loginWithGoogle() {
     setupTimeSelectors();
     listenToReservations();
     listenToMyReservation();
-    enableNotifications(false);
+    //enableNotifications(false);
   } catch (error) {
     console.error("Google sign-in error:", error);
     errorBox.textContent = error.code === "auth/popup-closed-by-user"
@@ -791,13 +791,7 @@ async function enableNotifications(showMessage = true) {
 
     if (currentUser?.uid) {
     await setDoc(
-        doc(
-            db,
-            "users",
-            currentUser.uid,
-            "fcmTokens",
-            encodeURIComponent(token)
-        ),
+        doc(db, "users", currentUser.uid, "fcmTokens", token)
         {
             token,
             uid: currentUser.uid,
