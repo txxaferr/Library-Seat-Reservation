@@ -775,20 +775,16 @@ async function enableNotifications(showMessage = true) {
       return null;
     }
 
-    const registration = await navigator.serviceWorker.ready;
+const registration = await navigator.serviceWorker.register(
+  "/Library-Seat-Reservation/firebase-messaging-sw.js"
+);
 
-    const token = await getToken(messaging, {
-      vapidKey: "BNuecVNHDIdHEgtA1ZCs3pGRiWZObpuBKI2lMX5DER45Z-tJxe6YZppT5hRB51qCBNB6EGt3QGD9WZVpF24qjAc",
-      serviceWorkerRegistration: registration
-    });
+const token = await getToken(messaging, {
+  vapidKey: "BNuecVNHDIdHEgtA1ZCs3pGRiWZObpuBKI2lMX5DER45Z-tJxe6YZppT5hRB51qCBNB6EGt3QGD9WZVpF24qjAc",
+  serviceWorkerRegistration: registration
+});
 
-    if (!token) {
-      if (showMessage) alert("Unable to get notification token.");
-      return null;
-    }
-
-    console.log("FCM Token:", token);
-
+console.log("FCM Token:", token);
     if (showMessage) {
       alert("Notifications are enabled on this device.");
     }
