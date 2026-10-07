@@ -485,6 +485,7 @@ async function loginWithGoogle() {
     setupTimeSelectors();
     listenToReservations();
     listenToMyReservation();
+    enableNotifications();
   } catch (error) {
     console.error("Google sign-in error:", error);
     errorBox.textContent = error.code === "auth/popup-closed-by-user"
