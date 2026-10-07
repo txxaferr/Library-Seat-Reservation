@@ -49,6 +49,7 @@ button:disabled{background:#c8cdd2;cursor:not-allowed}
 <header>
   <div class="logo">📚 Library Seat</div>
   <div class="top-actions">
+    <button class="secondary" onclick="enableNotifications()">🔔 Notifications</button>
     <button class="secondary" onclick="showPage('home')">Seats</button>
     <button class="secondary" onclick="showPage('reservation')">My Reservation</button>
   </div>
@@ -124,12 +125,46 @@ button:disabled{background:#c8cdd2;cursor:not-allowed}
 <div class="footer">Library Seat Reservation System • Prototype</div>
 </div>
 
-<script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
+import {
+  getFirestore,
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  setDoc,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  onSnapshot,
+  runTransaction,
+  query,
+  where,
+  orderBy,
+  limit
+} from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyCXLBGi3xm-wnjxJQP9NhBNtTMoWF6yT3s",
+  authDomain: "library-seat-reservation-28680.firebaseapp.com",
+  projectId: "library-seat-reservation-28680",
+  storageBucket: "library-seat-reservation-28680.firebasestorage.app",
+  messagingSenderId: "393080839732",
+  appId: "1:393080839732:web:5787e028d931fc4282f461",
+  measurementId: "G-86KPW1CF8Z"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
 let student = "";
 let selectedSeat = null;
 let reservation = null;
+let unsubscribeSeats = null;
+let unsubscribeReservation = null;
 
-const seats = [
+const defaultSeats = [
   {id:"A01",status:"available"},{id:"A02",status:"occupied"},
   {id:"A03",status:"available"},{id:"A04",status:"available"},
   {id:"B01",status:"available"},{id:"B02",status:"reserved"},
@@ -138,7 +173,30 @@ const seats = [
   {id:"C03",status:"occupied"},{id:"C04",status:"available"}
 ];
 
-function login(){
+let seats = [...defaultSeats];
+
+async function initializeSeats(){
+  const snapshot = await getDocs(collection(db, "seats"));
+  if (snapshot.empty) {
+    for (const seat of defaultSeats) {
+      await setDoc(doc(db, "seats", seat.id), seat);
+    }
+  }
+}
+
+function listenToSeats(){
+  if (unsubscribeSeats) unsubscribeSeats();
+  unsubscribeSeats = onSnapshot(collection(db, "seats"), snapshot => {
+    if (snapshot.empty) return;
+    seats = snapshot.docs.map(d => ({id:d.id, ...d.data()}));
+    renderSeats();
+  }, error => {
+    console.error("Firestore seats error:", error);
+    alert("Unable to load seats from Firebase. Please check Firestore Rules.");
+  });
+}
+
+async function login(){
   const input = document.getElementById("studentId");
   const value = input.value.trim();
 
@@ -149,12 +207,17 @@ function login(){
   }
 
   student = value;
-
-  // Hide the login page and show the seat selection page
   document.getElementById("loginPage").classList.add("hidden");
   document.getElementById("home").classList.remove("hidden");
 
-  renderSeats();
+  try {
+    await initializeSeats();
+    listenToSeats();
+    listenToMyReservation();
+  } catch (error) {
+    console.error(error);
+    alert("Firebase connection failed. Please check your Firestore setup and Rules.");
+  }
 }
 
 function showPage(page){
@@ -178,10 +241,12 @@ function renderSeats(){
   const grid=document.getElementById("seatGrid");
   grid.innerHTML="";
   let a=0,r=0,o=0;
-  seats.forEach(seat=>{
+
+  seats.sort((x,y)=>x.id.localeCompare(y.id)).forEach(seat=>{
     if(seat.status==="available")a++;
     if(seat.status==="reserved")r++;
     if(seat.status==="occupied")o++;
+
     const btn=document.createElement("button");
     btn.className="seat "+seat.status+(selectedSeat===seat.id?" selected":"");
     btn.innerHTML=seat.id+"<small>"+seat.status+"</small>";
@@ -189,6 +254,7 @@ function renderSeats(){
     if(seat.status==="available")btn.onclick=()=>selectSeat(seat.id);
     grid.appendChild(btn);
   });
+
   document.getElementById("availableCount").textContent=a;
   document.getElementById("reservedCount").textContent=r;
   document.getElementById("occupiedCount").textContent=o;
@@ -203,20 +269,106 @@ function selectSeat(id){
   renderSeats();
 }
 
-function reserveSeat(){
-  if(!selectedSeat)return;
-  const seat=seats.find(s=>s.id===selectedSeat);
-  seat.status="reserved";
-  reservation={
-    student:student,
-    seat:selectedSeat,
-    date:new Date().toLocaleDateString(),
-    status:"Reserved",
-    checkedIn:false
-  };
-  selectedSeat=null;
-  document.getElementById("selectedCard").classList.add("hidden");
-  showPage("reservation");
+function getTodayAt(hour, minute){
+  const d=new Date();
+  d.setHours(hour, minute, 0, 0);
+  return d;
+}
+
+async function reserveSeat(){
+  if(!selectedSeat || !student) return;
+
+  const seatId=selectedSeat;
+  const seatRef=doc(db,"seats",seatId);
+  const startAt=getTodayAt(13,0);
+  const endAt=getTodayAt(16,0);
+
+  if(endAt <= new Date()){
+    alert("Today's reservation time (13:00–16:00) has already ended.");
+    return;
+  }
+
+  try {
+    const reservationId = await runTransaction(db, async transaction => {
+      const seatSnap = await transaction.get(seatRef);
+      if(!seatSnap.exists()) throw new Error("Seat does not exist.");
+      const seatData=seatSnap.data();
+      if(seatData.status !== "available") throw new Error("This seat is no longer available.");
+
+      const reservationRef=doc(collection(db,"reservations"));
+      transaction.update(seatRef,{status:"reserved", reservedBy:student});
+      transaction.set(reservationRef,{
+        student,
+        seat:seatId,
+        date:new Date().toLocaleDateString(),
+        startAt,
+        endAt,
+        status:"Reserved",
+        checkedIn:false,
+        createdAt:new Date()
+      });
+      return reservationRef.id;
+    });
+
+    selectedSeat=null;
+    document.getElementById("selectedCard").classList.add("hidden");
+    showPage("reservation");
+    console.log("Reservation created:", reservationId);
+  } catch(error) {
+    console.error(error);
+    alert(error.message || "Unable to reserve this seat.");
+  }
+}
+
+function listenToMyReservation(){
+  if(unsubscribeReservation) unsubscribeReservation();
+  const q=query(
+    collection(db,"reservations"),
+    where("student","==",student),
+    where("status","in",["Reserved","Checked-in"]),
+    limit(1)
+  );
+
+  unsubscribeReservation=onSnapshot(q,snapshot=>{
+    if(snapshot.empty){
+      reservation=null;
+    }else{
+      const d=snapshot.docs[0];
+      reservation={id:d.id,...d.data()};
+      checkExpiration();
+    }
+    renderReservation();
+  }, error=>{
+    console.error("Reservation listener error:",error);
+  });
+}
+
+async function checkExpiration(){
+  if(!reservation || !reservation.endAt) return;
+
+  const end=reservation.endAt.toDate ? reservation.endAt.toDate() : new Date(reservation.endAt);
+  if(new Date() < end) return;
+
+  try{
+    const seatRef=doc(db,"seats",reservation.seat);
+    const reservationRef=doc(db,"reservations",reservation.id);
+    await runTransaction(db, async transaction=>{
+      const seatSnap=await transaction.get(seatRef);
+      transaction.update(reservationRef,{status:"Expired"});
+      if(seatSnap.exists()) transaction.update(seatRef,{status:"available",reservedBy:null});
+    });
+
+    if("Notification" in window && Notification.permission === "granted"){
+      new Notification("Library Seat Reservation",{
+        body:`Your reservation for seat ${reservation.seat} has expired.`
+      });
+    }
+    alert(`Your reservation for seat ${reservation.seat} has expired.`);
+    reservation=null;
+    renderReservation();
+  }catch(error){
+    console.error("Expiration error:",error);
+  }
 }
 
 function renderReservation(){
@@ -225,13 +377,18 @@ function renderReservation(){
     box.innerHTML="<p class='subtitle'>You do not have an active reservation.</p>";
     return;
   }
+
+  const start=reservation.startAt?.toDate ? reservation.startAt.toDate() : new Date(reservation.startAt);
+  const end=reservation.endAt?.toDate ? reservation.endAt.toDate() : new Date(reservation.endAt);
+  const time=`${start.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})} – ${end.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`;
+
   box.innerHTML=`
     <div class="success">✓ Reservation confirmed</div>
     <div class="reservation">
       <div class="row"><span>Student ID</span><b>${reservation.student}</b></div>
       <div class="row"><span>Seat</span><b>${reservation.seat}</b></div>
       <div class="row"><span>Date</span><b>${reservation.date}</b></div>
-      <div class="row"><span>Time</span><b>13:00 – 16:00</b></div>
+      <div class="row"><span>Time</span><b>${time}</b></div>
       <div class="row"><span>Status</span><b>${reservation.status}</b></div>
     </div>
     <br>
@@ -243,34 +400,80 @@ function renderReservation(){
 }
 
 function openCheckin(){
+  if(!reservation)return;
   document.getElementById("checkinSeat").textContent=reservation.seat;
   document.getElementById("checkinStudent").textContent=reservation.student;
   showPage("checkin");
 }
 
-function checkIn(){
-  reservation.checkedIn=true;
-  reservation.status="Checked-in";
-  const seat=seats.find(s=>s.id===reservation.seat);
-  seat.status="occupied";
-  showPage("reservation");
+async function checkIn(){
+  if(!reservation)return;
+  try{
+    await updateDoc(doc(db,"reservations",reservation.id),{
+      checkedIn:true,
+      status:"Checked-in"
+    });
+    await updateDoc(doc(db,"seats",reservation.seat),{status:"occupied"});
+    showPage("reservation");
+  }catch(error){
+    console.error(error);
+    alert("Unable to check in.");
+  }
 }
 
-function checkOut(){
-  const seat=seats.find(s=>s.id===reservation.seat);
-  seat.status="available";
-  reservation=null;
-  showPage("reservation");
+async function checkOut(){
+  if(!reservation)return;
+  try{
+    await updateDoc(doc(db,"seats",reservation.seat),{status:"available",reservedBy:null});
+    await updateDoc(doc(db,"reservations",reservation.id),{status:"Completed"});
+    reservation=null;
+    showPage("reservation");
+  }catch(error){
+    console.error(error);
+    alert("Unable to check out.");
+  }
 }
 
-function cancelReservation(){
-  const seat=seats.find(s=>s.id===reservation.seat);
-  seat.status="available";
-  reservation=null;
-  showPage("reservation");
+async function cancelReservation(){
+  if(!reservation)return;
+  try{
+    await updateDoc(doc(db,"seats",reservation.seat),{status:"available",reservedBy:null});
+    await updateDoc(doc(db,"reservations",reservation.id),{status:"Cancelled"});
+    reservation=null;
+    showPage("reservation");
+  }catch(error){
+    console.error(error);
+    alert("Unable to cancel reservation.");
+  }
 }
 
+async function enableNotifications(){
+  if(!("Notification" in window)){
+    alert("This browser does not support notifications.");
+    return;
+  }
+  const permission=await Notification.requestPermission();
+  if(permission==="granted"){
+    alert("Notifications are enabled on this device.");
+  }else{
+    alert("Notification permission was not granted.");
+  }
+}
+
+window.login=login;
+window.showPage=showPage;
+window.selectSeat=selectSeat;
+window.reserveSeat=reserveSeat;
+window.openCheckin=openCheckin;
+window.checkIn=checkIn;
+window.checkOut=checkOut;
+window.cancelReservation=cancelReservation;
+window.enableNotifications=enableNotifications;
+
+// Check expiry periodically while this page is open.
+setInterval(checkExpiration, 30000);
 showPage("loginPage");
+</script>
 </script>
 </body>
 </html>
