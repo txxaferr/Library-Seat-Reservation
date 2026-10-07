@@ -61,12 +61,13 @@ button:disabled{background:#c8cdd2;cursor:not-allowed}
 
 <section id="loginPage" class="card">
   <h1>Library Seat Reservation</h1>
-  <p class="subtitle">Reserve your study seat quickly and easily.</p>
-  <div class="form-group">
-    <label>Student ID</label>
-    <input id="studentId" placeholder="Enter your student ID">
+  <p class="subtitle">Sign in with your TU account to reserve a study seat.</p>
+  <button type="button" onclick="loginWithGoogle()">Sign in with Google</button>
+  <div class="notice" style="margin-top:16px">
+    <b>Who can use this system?</b><br>
+    TU accounts ending in <code>@dome.tu.ac.th</code> or <code>@g.siit.tu.ac.th</code>.
   </div>
-  <button type="button" onclick="login()">Login</button>
+  <p id="loginError" class="footer" style="color:#b42318"></p>
   <p class="footer">Scan the library QR code to access this system.</p>
 </section>
 
@@ -114,7 +115,7 @@ button:disabled{background:#c8cdd2;cursor:not-allowed}
   <div id="selectedCard" class="card hidden">
     <h3>Selected Seat</h3>
     <div class="reservation">
-      <div class="row"><span>Student ID</span><b id="selectedStudent"></b></div>
+      <div class="row"><span>Account</span><b id="selectedStudent"></b></div>
       <div class="row"><span>Seat</span><b id="selectedSeat"></b></div>
       <div class="row"><span>Date</span><b id="confirmDate"></b></div>
       <div class="row"><span>Time</span><b id="confirmTime"></b></div>
@@ -137,7 +138,7 @@ button:disabled{background:#c8cdd2;cursor:not-allowed}
     <div class="success">✓ Your reservation has been confirmed.</div>
     <div class="reservation">
       <div class="row"><span>Seat</span><b id="checkinSeat"></b></div>
-      <div class="row"><span>Student ID</span><b id="checkinStudent"></b></div>
+      <div class="row"><span>Account</span><b id="checkinStudent"></b></div>
       <div class="row"><span>Reservation</span><b id="checkinTime"></b></div>
     </div>
     <div class="notice">Please check in within 15 minutes of your reservation time. Otherwise, the seat will be released automatically.</div>
@@ -163,6 +164,12 @@ import {
   where,
   limit
 } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signOut
+} from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCXLBGi3xm-wnjxJQP9NhBNtTMoWF6yT3s",
@@ -176,8 +183,11 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
+const auth = getAuth(app);
+const googleProvider = new GoogleAuthProvider();
 
 let student = "";
+let currentUser = null;
 let selectedSeat = null;
 let reservation = null;
 let reservations = [];
@@ -412,7 +422,7 @@ function selectSeat(id) {
   }
 
   selectedSeat = id;
-  document.getElementById("selectedStudent").textContent = student;
+  document.getElementById("selectedStudent").textContent = currentUser?.email || "";
   document.getElementById("selectedSeat").textContent = id;
   document.getElementById("confirmDate").textContent = window.date;
   document.getElementById("confirmTime").textContent =
@@ -421,29 +431,34 @@ function selectSeat(id) {
   renderSeats();
 }
 
-async function login() {
-  const input = document.getElementById("studentId");
-  const value = input.value.trim();
-
-  if (!value) {
-    alert("Please enter your Student ID.");
-    input.focus();
-    return;
-  }
-
-  student = value;
-
-  document.getElementById("loginPage").classList.add("hidden");
-  document.getElementById("home").classList.remove("hidden");
-
-  setupTimeSelectors();
+async function loginWithGoogle() {
+  const errorBox = document.getElementById("loginError");
+  errorBox.textContent = "";
 
   try {
+    const result = await signInWithPopup(auth, googleProvider);
+    const user = result.user;
+    const email = (user.email || "").toLowerCase();
+    const allowed = email.endsWith("@dome.tu.ac.th") || email.endsWith("@g.siit.tu.ac.th");
+
+    if (!allowed) {
+      await signOut(auth);
+      errorBox.textContent = "Access denied. Please use your TU account (@dome.tu.ac.th or @g.siit.tu.ac.th).";
+      return;
+    }
+
+    currentUser = user;
+    student = user.uid;
+    document.getElementById("loginPage").classList.add("hidden");
+    document.getElementById("home").classList.remove("hidden");
+    setupTimeSelectors();
     listenToReservations();
     listenToMyReservation();
   } catch (error) {
-    console.error(error);
-    alert("Firebase connection failed. Please check Firestore setup and Rules.");
+    console.error("Google sign-in error:", error);
+    errorBox.textContent = error.code === "auth/popup-closed-by-user"
+      ? "Sign-in was cancelled."
+      : "Unable to sign in with Google. Please try again.";
   }
 }
 
@@ -488,7 +503,7 @@ function listenToMyReservation() {
 
   const q = query(
     collection(db, "reservations"),
-    where("student", "==", student),
+    where("uid", "==", currentUser?.uid || ""),
     where("status", "in", ["Reserved", "Checked-in"]),
     limit(1)
   );
@@ -562,7 +577,7 @@ async function reserveSeat() {
     }
 
     const studentConflict = latestReservations.some(r => {
-      if (r.student !== student || !isActiveReservation(r)) return false;
+      if (r.uid !== currentUser.uid || !isActiveReservation(r)) return false;
       const start = toDate(r.startAt);
       const end = toDate(r.endAt);
       return start && end && overlaps(window.start, window.end, start, end);
@@ -608,7 +623,7 @@ async function checkExpiredReservations() {
         checkedIn: false
       });
 
-      if (r.student === student && "Notification" in window && Notification.permission === "granted") {
+      if (r.uid === currentUser?.uid && "Notification" in window && Notification.permission === "granted") {
         new Notification("Library Seat Reservation", {
           body: `Your reservation for seat ${r.seat} has expired.`
         });
@@ -637,7 +652,7 @@ function renderReservation() {
   box.innerHTML = `
     <div class="success">✓ Reservation confirmed</div>
     <div class="reservation">
-      <div class="row"><span>Student ID</span><b>${reservation.student}</b></div>
+      <div class="row"><span>Account</span><b>${reservation.email || reservation.student}</b></div>
       <div class="row"><span>Seat</span><b>${reservation.seat}</b></div>
       <div class="row"><span>Date</span><b>${reservation.date}</b></div>
       <div class="row"><span>Time</span><b>${time}</b></div>
@@ -655,7 +670,7 @@ function openCheckin() {
   if (!reservation) return;
 
   document.getElementById("checkinSeat").textContent = reservation.seat;
-  document.getElementById("checkinStudent").textContent = reservation.student;
+  document.getElementById("checkinStudent").textContent = reservation.email || reservation.student;
 
   const start = toDate(reservation.startAt);
   const end = toDate(reservation.endAt);
@@ -747,7 +762,7 @@ async function enableNotifications() {
   }
 }
 
-window.login = login;
+window.loginWithGoogle = loginWithGoogle;
 window.showPage = showPage;
 window.selectSeat = selectSeat;
 window.updateEndTimes = updateEndTimes;
@@ -766,7 +781,6 @@ showPage("loginPage");
 </script>
 </body>
 </html>
-showPage("loginPage");
 </script>
 </body>
 </html>
