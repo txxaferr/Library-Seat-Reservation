@@ -171,6 +171,12 @@ import {
   signOut
 } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
 
+import {
+  getMessaging,
+  getToken,
+  onMessage
+} from "https://www.gstatic.com/firebasejs/12.19.0/firebase-messaging.js";
+
 const firebaseConfig = {
   apiKey: "AIzaSyCXLBGi3xm-wnjxJQP9NhBNtTMoWF6yT3s",
   authDomain: "library-seat-reservation-28680.firebaseapp.com",
@@ -182,6 +188,7 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
+const messaging = getMessaging(app);
 const db = getFirestore(app);
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
@@ -193,6 +200,30 @@ let reservation = null;
 let reservations = [];
 let unsubscribeReservations = null;
 let unsubscribeMyReservation = null;
+
+async function enableNotifications() {
+  try {
+    const permission = await Notification.requestPermission();
+
+    if (permission !== "granted") {
+      alert("Notification permission was not granted.");
+      return;
+    }
+
+    const token = await getToken(messaging, {
+      vapidKey: "BNuecVNHDIdHEgtA1ZCs3pGRiWZObpuBKI2lMX5DER45Z-tJxe6YZppT5hRB51qCBNB6EGt3QGD9WZVpF24qjAc"
+    });
+
+    if (token) {
+      console.log("FCM Token:", token);
+
+      // เราจะเอา token ไปเก็บ Firestore ในขั้นต่อไป
+    }
+
+  } catch (error) {
+    console.error("Notification error:", error);
+  }
+}
 
 const seatIds = [
   "A01","A02","A03","A04",
