@@ -156,9 +156,9 @@ import {
   doc,
   getDocs,
   setDoc,
+  addDoc,
   updateDoc,
   onSnapshot,
-  runTransaction,
   query,
   where,
   limit
@@ -541,68 +541,58 @@ async function reserveSeat() {
     return;
   }
 
-  // Re-check against the latest local snapshot before creating the reservation.
-  if (getSeatStatus(selectedSeat, window) !== "available") {
-    alert("This seat is already reserved for the selected time.");
-    renderSeats();
-    return;
-  }
-
-  const studentOverlap = reservations.some(r => {
-    if (r.student !== student || !isActiveReservation(r)) return false;
-    const start = toDate(r.startAt);
-    const end = toDate(r.endAt);
-    return start && end && overlaps(window.start, window.end, start, end);
-  });
-
-  if (studentOverlap) {
-    alert("You already have a reservation during this time.");
-    return;
-  }
-
   try {
-    // Transaction gives us a final server-side check against the latest reservations.
-    const reservationRef = doc(collection(db, "reservations"));
+    // Refresh reservations directly from Firestore before writing.
+    // This avoids using a Firestore transaction for this simple client-side reservation flow.
+    const latestSnapshot = await getDocs(collection(db, "reservations"));
+    const latestReservations = latestSnapshot.docs.map(d => ({ id: d.id, ...d.data() }));
 
-    await runTransaction(db, async transaction => {
-      const latest = await transaction.get(collection(db, "reservations"));
+    const seatConflict = latestReservations.some(r => {
+      if (r.seat !== selectedSeat || !isActiveReservation(r)) return false;
+      const start = toDate(r.startAt);
+      const end = toDate(r.endAt);
+      return start && end && overlaps(window.start, window.end, start, end);
+    });
 
-      const conflict = latest.docs.some(d => {
-        const r = d.data();
+    if (seatConflict) {
+      alert("This seat is already reserved for the selected time. Please choose another seat or time.");
+      reservations = latestReservations;
+      renderSeats();
+      return;
+    }
 
-        if (r.seat !== selectedSeat || !isActiveReservation(r)) return false;
+    const studentConflict = latestReservations.some(r => {
+      if (r.student !== student || !isActiveReservation(r)) return false;
+      const start = toDate(r.startAt);
+      const end = toDate(r.endAt);
+      return start && end && overlaps(window.start, window.end, start, end);
+    });
 
-        const start = toDate(r.startAt);
-        const end = toDate(r.endAt);
+    if (studentConflict) {
+      alert("You already have a reservation during this time.");
+      reservations = latestReservations;
+      return;
+    }
 
-        return start && end && overlaps(window.start, window.end, start, end);
-      });
-
-      if (conflict) {
-        throw new Error("This seat was just reserved by another user for the selected time.");
-      }
-
-      transaction.set(reservationRef, {
-        student,
-        seat: selectedSeat,
-        date: window.date,
-        startAt: window.start,
-        endAt: window.end,
-        status: "Reserved",
-        checkedIn: false,
-        createdAt: new Date()
-      });
+    await addDoc(collection(db, "reservations"), {
+      student,
+      seat: selectedSeat,
+      date: window.date,
+      startAt: window.start,
+      endAt: window.end,
+      status: "Reserved",
+      checkedIn: false,
+      createdAt: new Date()
     });
 
     selectedSeat = null;
     document.getElementById("selectedCard").classList.add("hidden");
     showPage("reservation");
   } catch (error) {
-    console.error(error);
-    alert(error.message || "Unable to reserve this seat.");
+    console.error("Reservation error:", error);
+    alert(`Unable to reserve this seat: ${error.message || error}`);
   }
 }
-
 async function checkExpiredReservations() {
   const now = new Date();
   const expired = reservations.filter(r => {
@@ -772,6 +762,10 @@ window.enableNotifications = enableNotifications;
 
 setInterval(checkExpiredReservations, 30000);
 
+showPage("loginPage");
+</script>
+</body>
+</html>
 showPage("loginPage");
 </script>
 </body>
