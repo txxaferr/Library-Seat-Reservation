@@ -176,7 +176,8 @@ button:disabled{background:#c8cdd2;cursor:not-allowed}
       <div class="row"><span>Reservation</span><b id="checkinTime"></b></div>
     </div>
     <div class="notice">Please check in within 15 minutes of your reservation time. Otherwise, the seat will be released automatically.</div>
-    <button onclick="checkIn()">Check-in Now</button>
+    <div class="notice" id="gpsStatus">Your location will be checked before check-in. You must be within 1 km of SIIT Library.</div>
+    <button id="checkInButton" onclick="checkIn()">Check-in Now</button>
   </div>
 </section>
 
@@ -827,9 +828,42 @@ function openCheckin() {
   showPage("checkin");
 }
 
+const LIBRARY_LOCATION = {
+  latitude: 14.069161074293463,
+  longitude: 100.60748408681538
+};
+const CHECKIN_RADIUS_METERS = 1000;
+
+function calculateDistanceMeters(lat1, lon1, lat2, lon2) {
+  const toRadians = degrees => degrees * Math.PI / 180;
+  const earthRadius = 6371000;
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) *
+    Math.sin(dLon / 2) ** 2;
+  return 2 * earthRadius * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function getCurrentPositionAsync() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error("This browser does not support location services."));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(resolve, reject, {
+      enableHighAccuracy: true,
+      timeout: 15000,
+      maximumAge: 0
+    });
+  });
+}
+
 async function checkIn() {
   if (!reservation) return;
 
+  const button = document.getElementById("checkInButton");
+  const gpsStatus = document.getElementById("gpsStatus");
   const start = toDate(reservation.startAt);
   const end = toDate(reservation.endAt);
   const now = new Date();
@@ -846,15 +880,55 @@ async function checkIn() {
   }
 
   try {
+    if (button) {
+      button.disabled = true;
+      button.textContent = "Checking location...";
+    }
+    if (gpsStatus) gpsStatus.textContent = "Please allow location access. Checking your distance from SIIT Library...";
+
+    const position = await getCurrentPositionAsync();
+    const distance = calculateDistanceMeters(
+      position.coords.latitude,
+      position.coords.longitude,
+      LIBRARY_LOCATION.latitude,
+      LIBRARY_LOCATION.longitude
+    );
+
+    // Reject inaccurate readings rather than accidentally allowing a remote check-in.
+    if (position.coords.accuracy > 150) {
+      throw new Error("Your location accuracy is too low. Please enable precise location and try again outdoors or near a window.");
+    }
+
+    if (distance > CHECKIN_RADIUS_METERS) {
+      const message = `Check-in denied. You are approximately ${(distance / 1000).toFixed(2)} km from SIIT Library. You must be within 1 km.`;
+      if (gpsStatus) gpsStatus.textContent = message;
+      alert(message);
+      return;
+    }
+
     await updateDoc(doc(db, "reservations", reservation.id), {
       checkedIn: true,
-      status: "Checked-in"
+      status: "Checked-in",
+      checkInDistanceMeters: Math.round(distance),
+      checkInAccuracyMeters: Math.round(position.coords.accuracy),
+      checkedInAt: new Date()
     });
 
+    if (gpsStatus) gpsStatus.textContent = `Location verified: approximately ${Math.round(distance)} m from SIIT Library.`;
     showPage("reservation");
   } catch (error) {
-    console.error(error);
-    alert("Unable to check in.");
+    console.error("GPS check-in error:", error);
+    let message = error.message || "Unable to verify your location.";
+    if (error.code === 1) message = "Location permission denied. Please allow location access in your browser/device settings.";
+    else if (error.code === 2) message = "Your location is unavailable. Please turn on GPS/location services and try again.";
+    else if (error.code === 3) message = "Location request timed out. Please try again.";
+    if (gpsStatus) gpsStatus.textContent = message;
+    alert(message);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Check-in Now";
+    }
   }
 }
 
