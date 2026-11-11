@@ -33,7 +33,13 @@ button:disabled{background:#c8cdd2;cursor:not-allowed}
 .legend{display:flex;gap:18px;flex-wrap:wrap;margin:15px 0;color:#59636e;font-size:14px}
 .dot{display:inline-block;width:12px;height:12px;border-radius:50%;margin-right:5px}
 .available{background:#28a745}.reserved{background:#f0ad00}.occupied{background:#dc3545}
-.seat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.seat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.table-card{min-height:118px;border:0;border-radius:12px;color:white;font-weight:bold;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;text-align:left;padding:14px;gap:6px}
+.table-card small{font-weight:normal;line-height:1.35}
+.zone-heading{grid-column:1/-1;margin:12px 0 0;color:#17324d;font-size:16px}
+.table-filters{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.attribute{font-size:12px;color:#eaf0f5;font-weight:normal}
+@media(max-width:600px){.seat-grid{grid-template-columns:repeat(2,1fr)}.table-filters{grid-template-columns:1fr}}
 .seat{min-height:80px;border:0;border-radius:12px;color:white;font-weight:bold;display:flex;flex-direction:column;align-items:center;justify-content:center}
 .seat small{font-weight:normal;margin-top:5px}
 .seat.available{background:#28a745}
@@ -76,8 +82,27 @@ button:disabled{background:#c8cdd2;cursor:not-allowed}
 
 <section id="home" class="hidden">
   <div class="card">
-    <h2>Choose Your Seat</h2>
-    <p class="subtitle">2nd Floor • Study Area</p>
+    <h2>Choose Your Study Area</h2>
+    <p class="subtitle">Select a floor and study type to find an available table.</p>
+
+    <div class="table-filters">
+      <div class="form-group">
+        <label for="floorSelect">Floor</label>
+        <select id="floorSelect" onchange="studyAreaChanged()">
+          <option value="2" selected>2nd Floor</option>
+          <option value="1">1st Floor</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="studyTypeSelect">Study type</label>
+        <select id="studyTypeSelect" onchange="studyAreaChanged()">
+          <option value="all">All study areas</option>
+          <option value="individual">Individual Study</option>
+          <option value="group">Group Study</option>
+        </select>
+      </div>
+    </div>
+    <p id="tableLoadMessage" class="notice">Loading tables from Firestore...</p>
 
     <div class="time-grid">
       <div class="form-group">
@@ -116,10 +141,16 @@ button:disabled{background:#c8cdd2;cursor:not-allowed}
   </div>
 
   <div id="selectedCard" class="card hidden">
-    <h3>Selected Seat</h3>
+    <h3>Selected Table / Desk</h3>
     <div class="reservation">
       <div class="row"><span>Account</span><b id="selectedStudent"></b></div>
-      <div class="row"><span>Seat</span><b id="selectedSeat"></b></div>
+      <div class="row"><span>Table / Desk</span><b id="selectedSeat"></b></div>
+      <div class="row"><span>Floor</span><b id="selectedFloor"></b></div>
+      <div class="row"><span>Capacity</span><b id="selectedCapacity"></b></div>
+      <div class="form-group" id="partySizeGroup">
+        <label for="partySize">Number of people</label>
+        <select id="partySize"></select>
+      </div>
       <div class="row"><span>Date</span><b id="confirmDate"></b></div>
       <div class="row"><span>Time</span><b id="confirmTime"></b></div>
     </div>
@@ -200,14 +231,14 @@ let currentUser = null;
 let selectedSeat = null;
 let reservation = null;
 let reservations = [];
+let tables = [];
+let selectedTable = null;
+let unsubscribeTables = null;
 let unsubscribeReservations = null;
 let unsubscribeMyReservation = null;
 
-const seatIds = [
-  "A01","A02","A03","A04",
-  "B01","B02","B03","B04",
-  "C01","C02","C03","C04"
-];
+// Table inventory is loaded from Firestore collection: tables.
+// Do not hardcode table IDs here; the database is the source of truth.
 
 const LIBRARY_OPEN = "08:00";
 const LIBRARY_CLOSE = "20:00";
@@ -344,6 +375,13 @@ function updateSelectedSummary() {
   }
 }
 
+function studyAreaChanged() {
+  selectedSeat = null;
+  selectedTable = null;
+  document.getElementById("selectedCard").classList.add("hidden");
+  renderSeats();
+}
+
 function bookingWindowChanged() {
   const startSelect = document.getElementById("startTime");
   const endSelect = document.getElementById("endTime");
@@ -354,16 +392,22 @@ function bookingWindowChanged() {
   }
 
   selectedSeat = null;
+  selectedTable = null;
   document.getElementById("selectedCard").classList.add("hidden");
   updateSelectedSummary();
   renderSeats();
 }
 
-function getSeatStatus(seatId, window) {
+function resourceIdFromReservation(r) {
+  // New reservations use tableId; legacy reservations continue to use seat.
+  return r.tableId || r.seat || r.seatId || "";
+}
+
+function getSeatStatus(tableId, window) {
   if (!window) return "available";
 
   const matching = reservations.filter(r => {
-    if (r.seat !== seatId || r.date !== window.date || !isActiveReservation(r)) {
+    if (resourceIdFromReservation(r) !== tableId || r.date !== window.date || !isActiveReservation(r)) {
       return false;
     }
 
@@ -377,69 +421,148 @@ function getSeatStatus(seatId, window) {
   return "available";
 }
 
+function attributeLabel(value, yesText, noText) {
+  if (value === true) return yesText;
+  if (value === false) return noText;
+  return "Not specified";
+}
+
 function renderSeats() {
   const grid = document.getElementById("seatGrid");
   if (!grid) return;
 
   grid.innerHTML = "";
   const window = getSelectedWindow();
+  const floor = Number(document.getElementById("floorSelect")?.value || 2);
+  const studyType = document.getElementById("studyTypeSelect")?.value || "all";
+  const visibleTables = tables
+    .filter(t => Number(t.floor) === floor && t.isReservable === true)
+    .filter(t => studyType === "all" || t.type === studyType)
+    .sort((a, b) => String(a.tableId).localeCompare(String(b.tableId)));
 
   let available = 0;
   let reserved = 0;
   let occupied = 0;
+  let currentZone = "";
 
-  seatIds.forEach(id => {
+  if (!tables.length) {
+    grid.textContent = "No table data loaded.";
+  }
+
+  visibleTables.forEach(table => {
+    const id = table.tableId || table.id;
     const status = getSeatStatus(id, window);
-
     if (status === "available") available++;
     if (status === "reserved") reserved++;
     if (status === "occupied") occupied++;
 
-    const btn = document.createElement("button");
-    btn.className = `seat ${status}${selectedSeat === id ? " selected" : ""}`;
-    btn.innerHTML = `${id}<small>${status}</small>`;
-    btn.disabled = status !== "available";
-
-    if (status === "available") {
-      btn.onclick = () => selectSeat(id);
+    const zone = table.zoneName || "Study Area";
+    if (zone !== currentZone) {
+      const heading = document.createElement("h3");
+      heading.className = "zone-heading";
+      heading.textContent = zone;
+      grid.appendChild(heading);
+      currentZone = zone;
     }
 
+    const btn = document.createElement("button");
+    btn.className = `table-card seat ${status}${selectedSeat === id ? " selected" : ""}`;
+    btn.disabled = status !== "available";
+
+    const name = document.createElement("span");
+    name.textContent = id;
+    const statusText = document.createElement("small");
+    statusText.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+    const capacity = document.createElement("small");
+    capacity.textContent = table.type === "individual"
+      ? "1 person"
+      : `${table.capacity || "?"} seats • min. ${table.minGroupSize || 1}`;
+    const outlets = document.createElement("span");
+    outlets.className = "attribute";
+    outlets.textContent = Number(table.builtInOutletCount) > 0
+      ? `Power outlets: ${table.builtInOutletCount} built-in`
+      : `Nearby outlet: ${attributeLabel(table.hasNearbyOutlet, "Yes", "No")}`;
+    const windowInfo = document.createElement("span");
+    windowInfo.className = "attribute";
+    windowInfo.textContent = `Near window: ${attributeLabel(table.nearWindow, "Yes", "No")}`;
+
+    btn.append(name, statusText, capacity, outlets, windowInfo);
+    if (status === "available") btn.onclick = () => selectSeat(id);
     grid.appendChild(btn);
   });
+
+  const message = document.getElementById("tableLoadMessage");
+  if (message && tables.length) {
+    message.textContent = visibleTables.length
+      ? `Showing ${visibleTables.length} reservable ${visibleTables.length === 1 ? "table/desk" : "tables/desks"} on Floor ${floor}. Unknown outlet/window information is shown as Not specified.`
+      : `No reservable tables found for this filter on Floor ${floor}.`;
+  }
 
   document.getElementById("availableCount").textContent = available;
   document.getElementById("reservedCount").textContent = reserved;
   document.getElementById("occupiedCount").textContent = occupied;
 }
 
+function listenToTables() {
+  if (unsubscribeTables) unsubscribeTables();
+  const message = document.getElementById("tableLoadMessage");
+  if (message) message.textContent = "Loading tables from Firestore...";
+
+  unsubscribeTables = onSnapshot(collection(db, "tables"), snapshot => {
+    tables = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderSeats();
+  }, error => {
+    console.error("Tables listener error:", error);
+    if (message) message.textContent = "Unable to load tables. Check that Firestore Rules allow signed-in users to read the tables collection.";
+  });
+}
 function selectSeat(id) {
   const window = getSelectedWindow();
   if (!window) {
     alert("Please select a date and time first.");
     return;
   }
-
   if (window.start <= new Date()) {
     alert("Please choose a future start time.");
     return;
   }
 
+  const table = tables.find(t => (t.tableId || t.id) === id);
+  if (!table) return;
   if (getSeatStatus(id, window) !== "available") {
-    alert("This seat is no longer available for the selected time.");
+    alert("This table is no longer available for the selected time.");
     renderSeats();
     return;
   }
 
   selectedSeat = id;
+  selectedTable = table;
   document.getElementById("selectedStudent").textContent = currentUser?.email || "";
   document.getElementById("selectedSeat").textContent = id;
+  document.getElementById("selectedFloor").textContent = `Floor ${table.floor}`;
+  document.getElementById("selectedCapacity").textContent = table.type === "individual"
+    ? "1 person" : `${table.capacity} seats`;
+
+  const partyGroup = document.getElementById("partySizeGroup");
+  const partySelect = document.getElementById("partySize");
+  if (table.type === "individual") {
+    partyGroup.classList.add("hidden");
+    partySelect.innerHTML = '<option value="1">1</option>';
+  } else {
+    partyGroup.classList.remove("hidden");
+    const min = Number(table.minGroupSize || 1);
+    const max = Number(table.capacity || min);
+    partySelect.innerHTML = Array.from({length: Math.max(0, max - min + 1)}, (_, i) => {
+      const n = min + i;
+      return `<option value="${n}">${n} people</option>`;
+    }).join("");
+  }
+
   document.getElementById("confirmDate").textContent = window.date;
-  document.getElementById("confirmTime").textContent =
-    `${window.startTime} – ${window.endTime}`;
+  document.getElementById("confirmTime").textContent = `${window.startTime} – ${window.endTime}`;
   document.getElementById("selectedCard").classList.remove("hidden");
   renderSeats();
 }
-
 async function loginWithGoogle() {
   const errorBox = document.getElementById("loginError");
   errorBox.textContent = "";
@@ -461,6 +584,7 @@ async function loginWithGoogle() {
     document.getElementById("loginPage").classList.add("hidden");
     document.getElementById("home").classList.remove("hidden");
     setupTimeSelectors();
+    listenToTables();
     listenToReservations();
     listenToMyReservation();
   } catch (error) {
@@ -535,7 +659,7 @@ function listenToMyReservation() {
 async function reserveSeat() {
   const window = getSelectedWindow();
 
-  if (!student || !selectedSeat || !window) {
+  if (!student || !selectedSeat || !selectedTable || !window) {
     alert("Please select a date, time, and seat.");
     return;
   }
@@ -572,7 +696,7 @@ async function reserveSeat() {
     const latestReservations = latestSnapshot.docs.map(d => ({ id: d.id, ...d.data() }));
 
     const seatConflict = latestReservations.some(r => {
-      if (r.seat !== selectedSeat || !isActiveReservation(r)) return false;
+      if (resourceIdFromReservation(r) !== selectedSeat || !isActiveReservation(r)) return false;
       const start = toDate(r.startAt);
       const end = toDate(r.endAt);
       return start && end && overlaps(window.start, window.end, start, end);
@@ -602,7 +726,13 @@ async function reserveSeat() {
       uid: currentUser.uid,
       email: currentUser.email,
       student: currentUser.email,
+      // Keep legacy `seat` for compatibility with existing client code.
       seat: selectedSeat,
+      tableId: selectedSeat,
+      floor: Number(selectedTable.floor),
+      zoneId: selectedTable.zoneId || "",
+      tableType: selectedTable.tableType || "",
+      partySize: selectedTable.type === "individual" ? 1 : Number(document.getElementById("partySize").value),
       date: window.date,
       startAt: window.start,
       endAt: window.end,
@@ -612,6 +742,7 @@ async function reserveSeat() {
     });
 
     selectedSeat = null;
+    selectedTable = null;
     document.getElementById("selectedCard").classList.add("hidden");
     showPage("reservation");
   } catch (error) {
@@ -637,7 +768,7 @@ async function checkExpiredReservations() {
       if (r.uid === currentUser?.uid) {
         await showLocalNotification(
           "Library Seat Reservation",
-          `Your reservation for seat ${r.seat} has expired.`
+          `Your reservation for ${r.tableId || r.seat} has expired.`
         );
       }
     } catch (error) {
@@ -665,7 +796,9 @@ function renderReservation() {
     <div class="success">✓ Reservation confirmed</div>
     <div class="reservation">
       <div class="row"><span>Account</span><b>${reservation.email || reservation.student}</b></div>
-      <div class="row"><span>Seat</span><b>${reservation.seat}</b></div>
+      <div class="row"><span>Table / Desk</span><b>${reservation.tableId || reservation.seat}</b></div>
+      ${reservation.floor ? `<div class="row"><span>Floor</span><b>${reservation.floor}</b></div>` : ""}
+      ${reservation.partySize ? `<div class="row"><span>People</span><b>${reservation.partySize}</b></div>` : ""}
       <div class="row"><span>Date</span><b>${reservation.date}</b></div>
       <div class="row"><span>Time</span><b>${time}</b></div>
       <div class="row"><span>Status</span><b>${reservation.status}</b></div>
@@ -681,7 +814,7 @@ function renderReservation() {
 function openCheckin() {
   if (!reservation) return;
 
-  document.getElementById("checkinSeat").textContent = reservation.seat;
+  document.getElementById("checkinSeat").textContent = reservation.tableId || reservation.seat;
   document.getElementById("checkinStudent").textContent = reservation.email || reservation.student;
 
   const start = toDate(reservation.startAt);
@@ -906,6 +1039,8 @@ onMessage(messaging, async payload => {
 window.loginWithGoogle = loginWithGoogle;
 window.showPage = showPage;
 window.selectSeat = selectSeat;
+window.renderSeats = renderSeats;
+window.studyAreaChanged = studyAreaChanged;
 window.updateEndTimes = updateEndTimes;
 window.updateSelectedSummary = updateSelectedSummary;
 window.bookingWindowChanged = bookingWindowChanged;
