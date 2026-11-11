@@ -1,0 +1,36 @@
+name: Seed Library Tables (One-time)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_seed:
+        description: "Confirm creation of the 90 documents in Firestore tables/"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  seed-tables:
+    if: ${{ inputs.confirm_seed == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Firebase Admin SDK
+        working-directory: github-actions
+        run: npm install --no-save firebase-admin@^13.5.0
+
+      - name: Create table documents
+        working-directory: github-actions
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: node seed-tables.js
