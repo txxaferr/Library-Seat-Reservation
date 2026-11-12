@@ -1,4 +1,3 @@
-
 const admin = require("firebase-admin");
 
 const serviceAccount = JSON.parse(
@@ -30,8 +29,15 @@ async function getUserTokens(uid) {
     }));
 }
 
+
 async function sendNotification(tokens, title, body, data) {
-  if (!tokens.length) return false;
+  if (!tokens.length) {
+    console.log(`[FCM] No tokens found for: ${title}`);
+    return false;
+  }
+
+  console.log(`[FCM] Attempting to send: ${title}`);
+  console.log(`[FCM] Token count: ${tokens.length}`);
 
   const response = await messaging.sendEachForMulticast({
     tokens: tokens.map((item) => item.token),
@@ -39,16 +45,32 @@ async function sendNotification(tokens, title, body, data) {
     data,
   });
 
+  console.log(`[FCM] Success: ${response.successCount}`);
+  console.log(`[FCM] Failure: ${response.failureCount}`);
+
   const cleanup = [];
 
   response.responses.forEach((result, index) => {
+    if (result.success) {
+      console.log(`[FCM] Token ${index + 1}: SENT`);
+      return;
+    }
+
     const code = result.error?.code;
+    const message = result.error?.message;
+
+    console.error(
+      `[FCM] Token ${index + 1}: FAILED`,
+      code,
+      message
+    );
 
     if (
       code === "messaging/registration-token-not-registered" ||
       code === "messaging/invalid-registration-token"
     ) {
       cleanup.push(tokens[index].ref.delete());
+      console.log(`[FCM] Invalid token ${index + 1} scheduled for deletion`);
     }
   });
 
