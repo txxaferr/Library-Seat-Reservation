@@ -9,26 +9,33 @@ admin.initializeApp({
 });
 
 const db = admin.firestore();
+console.log("[Firebase] Project ID:", serviceAccount.project_id);
 const messaging = admin.messaging();
 
 const REMINDER_MIN = 10;
 const REMINDER_MAX = 15;
 
 async function getUserTokens(uid) {
+  console.log("[FCM] Looking for UID:", uid);
+
   const snapshot = await db
     .collection("users")
     .doc(uid)
     .collection("fcmTokens")
     .get();
 
-  return snapshot.docs
-    .filter((doc) => doc.data().token)
-    .map((doc) => ({
-      ref: doc.ref,
-      token: doc.data().token,
-    }));
-}
+  console.log("[FCM] Documents found:", snapshot.size);
 
+  const validTokens = snapshot.docs
+    .filter((doc) => doc.data().token);
+
+  console.log("[FCM] Documents with token:", validTokens.length);
+
+  return validTokens.map((doc) => ({
+    ref: doc.ref,
+    token: doc.data().token,
+  }));
+}
 
 async function sendNotification(tokens, title, body, data) {
   if (!tokens.length) {
